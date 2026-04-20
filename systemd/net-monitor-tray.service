@@ -1,0 +1,15 @@
+[Unit]
+Description=net-monitor tray indicator
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=__PYTHON_BIN__ -m net_monitor tray
+Restart=always
+RestartSec=2
+Environment=PYTHONPATH=__PROJECT_DIR__
+WorkingDirectory=__PROJECT_DIR__
+
+[Install]
+WantedBy=default.target

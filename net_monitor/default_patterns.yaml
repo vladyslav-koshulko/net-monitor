@@ -1,0 +1,28 @@
+patterns:
+  - name: authorization_header
+    regex: "(?i)\\bauthorization\\s*:\\s*([^\\r\\n]+)"
+    severity: high
+
+  - name: cookie_header
+    regex: "(?i)\\bcookie\\s*:\\s*([^\\r\\n]+)"
+    severity: medium
+
+  - name: set_cookie_header
+    regex: "(?i)\\bset-cookie\\s*:\\s*([^\\r\\n]+)"
+    severity: medium
+
+  - name: bearer_token
+    regex: "(?i)\\bbearer\\s+([a-z0-9._\\-+/=]{8,})"
+    severity: high
+
+  - name: api_key
+    regex: "(?i)\\b(?:api[_-]?key|x-api-key)\\b\\s*[:=]\\s*([^\\s&\\r\\n]+)"
+    severity: high
+
+  - name: password_like
+    regex: "(?i)\\b(?:password|passwd|pwd)\\b\\s*[:=]\\s*([^\\s&\\r\\n;]+)"
+    severity: critical
+
+exceptions:
+  hosts: []
+  regexes: []

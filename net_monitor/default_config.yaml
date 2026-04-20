@@ -1,0 +1,104 @@
+storage:
+  home: "~/.net-monitor"
+  flush_interval_sec: 60
+  adaptive_flush: true
+  flush_batch_min: 80
+  flush_batch_max: 1200
+  burst_pps_hint: 1500
+  save_events_jsonl: true
+  save_ecs_jsonl: true
+  save_notify_jsonl: true
+  save_decoded_payloads: true
+  min_severity_to_save: "low"
+  adaptive_flush_batching:
+    enabled: true
+    batch_size: 100
+    flush_interval_sec: 10
+
+capture:
+  interfaces: ["all"]
+  targets:
+    mode: "all"  # all|ips|subnets|ranges
+    ips: []
+    subnets: []
+    ranges: []   # e.g. ["192.168.1.10-192.168.1.50"]
+  ports:
+    mode: "all" # all|list|range
+    list: []
+    ranges: []   # e.g. ["80-90", "443-443"]
+  protocols: ["all"] # all|tcp|udp|icmp|dns|http|tls|ssh
+
+rules:
+  profile: "balanced"  # strict|balanced|lenient
+  min_severity: "low"
+  dedupe_window_sec: 20
+  min_repeat: 1
+
+enrichment:
+  geo_asn: true
+  process_correlation: true
+  process_refresh_sec: 5
+  geo_ttl_sec: 21600
+  geo_workers: 2
+
+behavior:
+  enabled: true
+  dst_burst_window_sec: 20
+  dst_burst_threshold: 40
+  low_severity_sampling:
+    enabled: true
+    burst_pps: 1200
+    keep_ratio: 0.35
+
+baseline:
+  enabled: true
+  learn_packets: 2000
+  anomaly_threshold_ratio: 5.0
+
+evidence:
+  enabled: true
+  pre_seconds: 10
+  post_seconds: 8
+  max_ring_packets: 10000
+
+notifications:
+  enabled: true
+  min_severity: "critical"
+
+tray:
+  show_packet_count: true
+  indicator_label_mode: "risk"
+  pin_scroll: true
+
+services:
+  daemon_unit: "net-monitor.service"
+  tray_unit: "net-monitor-tray.service"
+
+ecs:
+  enabled: true
+
+exports:
+  loki:
+    enabled: false
+    direct_push: false
+    url: "http://127.0.0.1:3100/loki/api/v1/push"
+    detect_on_start: true
+    timeout_sec: 3
+  elastic:
+    enabled: false
+    direct_push: false
+    url: "http://127.0.0.1:9200"
+    bulk_url: "http://127.0.0.1:9200/_bulk"
+    index: "net-monitor-events"
+    detect_on_start: true
+    timeout_sec: 3
+
+tls_audit:
+  enabled: true
+  warn_expiry_days: 14
+  fail_on_expired: true
+
+runtime:
+  stats_interval_sec: 5
+  health_interval_sec: 5
+  tcp_stream_max_bytes: 131072

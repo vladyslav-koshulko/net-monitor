@@ -1,0 +1,23 @@
+[Unit]
+Description=net-monitor passive packet security daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__PROJECT_DIR__
+Environment=PYTHONPATH=__PROJECT_DIR__
+Environment=NET_MONITOR_HOME=__USER_HOME__/.net-monitor
+ExecStart=__PYTHON_BIN__ -m net_monitor daemon
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=__USER_HOME__/.net-monitor
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

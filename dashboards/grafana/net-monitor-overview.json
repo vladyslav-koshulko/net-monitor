@@ -1,0 +1,54 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Alerts by severity",
+      "targets": [
+        {
+          "expr": "sum by (severity) (count_over_time({app=\"net-monitor\"}[5m]))",
+          "legendFormat": "{{severity}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Top destination IPs",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (dst_ip) (count_over_time({app=\"net-monitor\"}[10m])))",
+          "legendFormat": "{{dst_ip}}",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "type": "table",
+      "title": "Recent critical/high events",
+      "targets": [
+        {
+          "expr": "{app=\"net-monitor\", severity=~\"critical|high\"}",
+          "refId": "C"
+        }
+      ],
+      "options": {"showHeader": true},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 9}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["net-monitor", "security", "network"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Net Monitor Overview",
+  "uid": "net-monitor-overview",
+  "version": 1
+}
