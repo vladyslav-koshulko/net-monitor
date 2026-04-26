@@ -19,6 +19,7 @@ gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import AyatanaAppIndicator3 as AppIndicator3
 from gi.repository import GLib, Gtk, Notify
 
+from .cleanup import cleanup_events_file, normalize_cleanup_severity
 from .ip_scan_backend import IPScanBackend, read_scan_history
 
 
@@ -34,6 +35,98 @@ OFFSET_FILE = HOME / ".notify_offset"
 UI_HISTORY = HOME / "ui_history.json"
 SCAN_HISTORY = HOME / "scan_history.jsonl"
 PATTERNS = HOME / "patterns.yaml"
+
+TAB_SETTINGS_INDEX = 3
+
+LANG_LABELS = {
+    "en": "English",
+    "uk": "Українська",
+    "ru": "Русский",
+}
+
+I18N = {
+    "en": {
+        "menu_open": "Open Monitor",
+        "menu_settings": "Settings",
+        "menu_monitoring": "Monitoring Enabled",
+        "menu_popup": "Popup Notifications",
+        "menu_restart": "Restart Daemon",
+        "menu_quit": "Quit",
+        "menu_language": "Language",
+        "tab_monitor": "Monitor",
+        "tab_packets": "Packets",
+        "tab_tls": "TLS posture",
+        "tab_settings": "Settings",
+        "tab_cleanup": "Cleanup",
+        "tab_advanced": "Advanced",
+        "tab_geo": "Geo/ASN",
+        "tab_flows": "Flows",
+        "cleanup_header": "Cleanup settings",
+        "cleanup_auto": "Auto cleanup old packets",
+        "cleanup_interval": "Auto cleanup interval (sec)",
+        "cleanup_age": "Packet age to cleanup (sec)",
+        "cleanup_below": "Cleanup severities below",
+        "cleanup_manual": "Manual cleanup",
+        "cleanup_button": "Clean packets now",
+        "save_cleanup": "Save cleanup settings",
+        "scan_history": "Scan history",
+        "scan_restored": "Restored scan result from history",
+    },
+    "uk": {
+        "menu_open": "Відкрити монітор",
+        "menu_settings": "Налаштування",
+        "menu_monitoring": "Моніторинг увімкнено",
+        "menu_popup": "Спливаючі сповіщення",
+        "menu_restart": "Перезапустити демон",
+        "menu_quit": "Вийти",
+        "menu_language": "Мова",
+        "tab_monitor": "Монітор",
+        "tab_packets": "Пакети",
+        "tab_tls": "TLS стан",
+        "tab_settings": "Налаштування",
+        "tab_cleanup": "Очищення",
+        "tab_advanced": "Розширені",
+        "tab_geo": "Гео/ASN",
+        "tab_flows": "Потоки",
+        "cleanup_header": "Налаштування очищення",
+        "cleanup_auto": "Автоочищення старих пакетів",
+        "cleanup_interval": "Інтервал автоочищення (сек)",
+        "cleanup_age": "Вік пакетів для очищення (сек)",
+        "cleanup_below": "Очищати критичність нижче",
+        "cleanup_manual": "Ручне очищення",
+        "cleanup_button": "Очистити пакети зараз",
+        "save_cleanup": "Зберегти налаштування очищення",
+        "scan_history": "Історія сканувань",
+        "scan_restored": "Відновлено результат сканування з історії",
+    },
+    "ru": {
+        "menu_open": "Открыть монитор",
+        "menu_settings": "Настройки",
+        "menu_monitoring": "Мониторинг включен",
+        "menu_popup": "Всплывающие уведомления",
+        "menu_restart": "Перезапустить демон",
+        "menu_quit": "Выход",
+        "menu_language": "Язык",
+        "tab_monitor": "Монитор",
+        "tab_packets": "Пакеты",
+        "tab_tls": "TLS состояние",
+        "tab_settings": "Настройки",
+        "tab_cleanup": "Очистка",
+        "tab_advanced": "Расширенные",
+        "tab_geo": "Гео/ASN",
+        "tab_flows": "Потоки",
+        "cleanup_header": "Настройки очистки",
+        "cleanup_auto": "Автоочистка старых пакетов",
+        "cleanup_interval": "Интервал автоочистки (сек)",
+        "cleanup_age": "Возраст пакетов для очистки (сек)",
+        "cleanup_below": "Очищать критичность ниже",
+        "cleanup_manual": "Ручная очистка",
+        "cleanup_button": "Очистить пакеты сейчас",
+        "save_cleanup": "Сохранить настройки очистки",
+        "scan_history": "История сканирований",
+        "scan_restored": "Восстановлен результат сканирования из истории",
+    },
+}
 
 
 class NetMonitorTray:
@@ -51,6 +144,13 @@ class NetMonitorTray:
         self._scan_started_ts = 0.0
         self._selected_packet_event_id = ""
         self._pin_scroll_enabled = True
+        self._language = "en"
+
+        cfg = self._read_yaml()
+        tray_cfg = cfg.get("tray", {}) if isinstance(cfg.get("tray"), dict) else {}
+        lang = str(tray_cfg.get("language", "en")).strip().lower()
+        if lang in LANG_LABELS:
+            self._language = lang
 
         self.indicator = AppIndicator3.Indicator.new(
             "net-monitor",
@@ -66,30 +166,58 @@ class NetMonitorTray:
         GLib.timeout_add(300, self._refresh_scan_progress)
         GLib.timeout_add_seconds(1, self._poll_notifications)
 
+    def _t(self, key: str) -> str:
+        lang_map = I18N.get(self._language, I18N["en"])
+        return lang_map.get(key, I18N["en"].get(key, key))
+
+    def _on_set_language(self, _item, lang: str) -> None:
+        lang = str(lang or "en").strip().lower()
+        if lang not in LANG_LABELS or lang == self._language:
+            return
+        self._language = lang
+        cfg = self._read_yaml()
+        cfg.setdefault("tray", {})
+        cfg["tray"]["language"] = lang
+        self._write_yaml(cfg)
+        self.indicator.set_menu(self._build_menu())
+        if self.window is not None:
+            self.window.destroy()
+            self.window = self._build_window()
+            self.window.show_all()
+
     def _build_menu(self):
         menu = Gtk.Menu()
 
-        open_item = Gtk.MenuItem(label="Open Monitor")
+        open_item = Gtk.MenuItem(label=self._t("menu_open"))
         open_item.connect("activate", self._on_open_monitor)
         menu.append(open_item)
 
-        settings_item = Gtk.MenuItem(label="Settings")
+        settings_item = Gtk.MenuItem(label=self._t("menu_settings"))
         settings_item.connect("activate", self._on_open_settings)
         menu.append(settings_item)
 
-        self.monitor_toggle_item = Gtk.CheckMenuItem(label="Monitoring Enabled")
+        self.monitor_toggle_item = Gtk.CheckMenuItem(label=self._t("menu_monitoring"))
         self.monitor_toggle_item.connect("toggled", self._on_toggle_monitoring)
         menu.append(self.monitor_toggle_item)
 
-        self.popup_toggle_item = Gtk.CheckMenuItem(label="Popup Notifications")
+        self.popup_toggle_item = Gtk.CheckMenuItem(label=self._t("menu_popup"))
         self.popup_toggle_item.connect("toggled", self._on_toggle_popup_notifications)
         menu.append(self.popup_toggle_item)
 
-        restart_item = Gtk.MenuItem(label="Restart Daemon")
+        lang_item = Gtk.MenuItem(label=self._t("menu_language"))
+        lang_menu = Gtk.Menu()
+        for code in ("en", "uk", "ru"):
+            item = Gtk.MenuItem(label=LANG_LABELS[code])
+            item.connect("activate", self._on_set_language, code)
+            lang_menu.append(item)
+        lang_item.set_submenu(lang_menu)
+        menu.append(lang_item)
+
+        restart_item = Gtk.MenuItem(label=self._t("menu_restart"))
         restart_item.connect("activate", self._on_restart_daemon)
         menu.append(restart_item)
 
-        quit_item = Gtk.MenuItem(label="Quit")
+        quit_item = Gtk.MenuItem(label=self._t("menu_quit"))
         quit_item.connect("activate", self._on_quit)
         menu.append(quit_item)
 
@@ -387,6 +515,47 @@ class NetMonitorTray:
 
         settings_tab.pack_start(grid, False, False, 0)
 
+        cleanup_tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        cleanup_grid = Gtk.Grid(column_spacing=8, row_spacing=8)
+        cleanup_tab.pack_start(Gtk.Label(label=self._t("cleanup_header")), False, False, 0)
+
+        self.auto_cleanup_switch = Gtk.Switch()
+        cleanup_grid.attach(Gtk.Label(label=self._t("cleanup_auto")), 0, 0, 1, 1)
+        cleanup_grid.attach(self.auto_cleanup_switch, 1, 0, 1, 1)
+
+        self.auto_cleanup_interval_spin = Gtk.SpinButton.new_with_range(5, 86400, 5)
+        self.auto_cleanup_interval_spin.set_value(1800)
+        cleanup_grid.attach(Gtk.Label(label=self._t("cleanup_interval")), 0, 1, 1, 1)
+        cleanup_grid.attach(self.auto_cleanup_interval_spin, 1, 1, 1, 1)
+
+        self.auto_cleanup_age_spin = Gtk.SpinButton.new_with_range(5, 604800, 5)
+        self.auto_cleanup_age_spin.set_value(1800)
+        cleanup_grid.attach(Gtk.Label(label=self._t("cleanup_age")), 0, 2, 1, 1)
+        cleanup_grid.attach(self.auto_cleanup_age_spin, 1, 2, 1, 1)
+
+        self.auto_cleanup_severity_combo = Gtk.ComboBoxText()
+        for sev in ["low", "medium", "high", "critical", "all"]:
+            self.auto_cleanup_severity_combo.append_text(sev)
+        self.auto_cleanup_severity_combo.set_active(2)
+        cleanup_grid.attach(Gtk.Label(label=self._t("cleanup_below")), 0, 3, 1, 1)
+        cleanup_grid.attach(self.auto_cleanup_severity_combo, 1, 3, 1, 1)
+
+        self.packet_cleanup_severity_combo = Gtk.ComboBoxText()
+        for mode in ["below medium", "below high", "below critical", "all severities"]:
+            self.packet_cleanup_severity_combo.append_text(mode)
+        self.packet_cleanup_severity_combo.set_active(1)
+        cleanup_grid.attach(Gtk.Label(label=self._t("cleanup_manual")), 0, 4, 1, 1)
+        cleanup_grid.attach(self.packet_cleanup_severity_combo, 1, 4, 1, 1)
+
+        packet_cleanup_btn = Gtk.Button(label=self._t("cleanup_button"))
+        packet_cleanup_btn.connect("clicked", self._on_cleanup_packets)
+        cleanup_grid.attach(packet_cleanup_btn, 1, 5, 1, 1)
+
+        save_cleanup_btn = Gtk.Button(label=self._t("save_cleanup"))
+        save_cleanup_btn.connect("clicked", self._on_save)
+        cleanup_grid.attach(save_cleanup_btn, 1, 6, 1, 1)
+        cleanup_tab.pack_start(cleanup_grid, False, False, 0)
+
         adv_grid = Gtk.Grid(column_spacing=8, row_spacing=8)
 
         self.rules_profile_combo = Gtk.ComboBoxText()
@@ -489,16 +658,17 @@ class NetMonitorTray:
         adv_btn_row.pack_start(save_adv_btn, False, False, 0)
         advanced_tab.pack_start(adv_btn_row, False, False, 0)
 
-        self.notebook.append_page(monitor_tab, Gtk.Label(label="Monitor"))
-        self.notebook.append_page(packets_tab, Gtk.Label(label="Packets"))
-        self.notebook.append_page(tls_tab, Gtk.Label(label="TLS posture"))
-        self.notebook.append_page(settings_tab, Gtk.Label(label="Settings"))
-        self.notebook.append_page(advanced_tab, Gtk.Label(label="Advanced"))
-        self.notebook.append_page(geo_tab, Gtk.Label(label="Geo/ASN"))
+        self.notebook.append_page(monitor_tab, Gtk.Label(label=self._t("tab_monitor")))
+        self.notebook.append_page(packets_tab, Gtk.Label(label=self._t("tab_packets")))
+        self.notebook.append_page(tls_tab, Gtk.Label(label=self._t("tab_tls")))
+        self.notebook.append_page(settings_tab, Gtk.Label(label=self._t("tab_settings")))
+        self.notebook.append_page(cleanup_tab, Gtk.Label(label=self._t("tab_cleanup")))
+        self.notebook.append_page(advanced_tab, Gtk.Label(label=self._t("tab_advanced")))
+        self.notebook.append_page(geo_tab, Gtk.Label(label=self._t("tab_geo")))
         self.notebook.append_page(http_tab, Gtk.Label(label="HTTP"))
         self.notebook.append_page(dns_tab, Gtk.Label(label="DNS"))
         self.notebook.append_page(smtp_tab, Gtk.Label(label="SMTP"))
-        self.notebook.append_page(flows_tab, Gtk.Label(label="Flows"))
+        self.notebook.append_page(flows_tab, Gtk.Label(label=self._t("tab_flows")))
         box.pack_start(self.notebook, True, True, 0)
 
         win.add(box)
@@ -640,6 +810,13 @@ class NetMonitorTray:
         save_min = str(storage_cfg.get("min_severity_to_save", "low")).lower()
         sev_modes = ["low", "medium", "high", "critical"]
         self.save_min_severity_combo.set_active(sev_modes.index(save_min) if save_min in sev_modes else 0)
+        cleanup_cfg = storage_cfg.get("cleanup", {}) if isinstance(storage_cfg.get("cleanup"), dict) else {}
+        self.auto_cleanup_switch.set_active(bool(cleanup_cfg.get("enabled", False)))
+        self.auto_cleanup_interval_spin.set_value(float(cleanup_cfg.get("interval_sec", 1800) or 1800))
+        self.auto_cleanup_age_spin.set_value(float(cleanup_cfg.get("older_than_sec", 1800) or 1800))
+        cleanup_below = normalize_cleanup_severity(str(cleanup_cfg.get("severity_below", "high")))
+        cleanup_modes = ["low", "medium", "high", "critical", "all"]
+        self.auto_cleanup_severity_combo.set_active(cleanup_modes.index(cleanup_below) if cleanup_below in cleanup_modes else 2)
 
         rules_cfg = cfg.get("rules", {})
         profile = str(rules_cfg.get("profile", "balanced")).lower()
@@ -724,6 +901,7 @@ class NetMonitorTray:
         cfg["tray"]["show_packet_count"] = bool(self.show_packet_count_switch.get_active())
         cfg["tray"]["indicator_label_mode"] = (self.indicator_mode_combo.get_active_text() or "risk").strip().lower()
         cfg["tray"]["pin_scroll"] = bool(self.pin_scroll_switch.get_active())
+        cfg["tray"]["language"] = self._language
         cfg.setdefault("storage", {})
         cfg["storage"]["flush_interval_sec"] = int(self.persist_interval_spin.get_value())
         cfg["storage"]["save_events_jsonl"] = bool(self.save_events_switch.get_active())
@@ -731,6 +909,13 @@ class NetMonitorTray:
         cfg["storage"]["save_notify_jsonl"] = bool(self.save_notify_switch.get_active())
         cfg["storage"]["save_decoded_payloads"] = bool(self.save_decoded_switch.get_active())
         cfg["storage"]["min_severity_to_save"] = (self.save_min_severity_combo.get_active_text() or "low").strip().lower()
+        cfg["storage"].setdefault("cleanup", {})
+        cfg["storage"]["cleanup"]["enabled"] = bool(self.auto_cleanup_switch.get_active())
+        cfg["storage"]["cleanup"]["interval_sec"] = int(self.auto_cleanup_interval_spin.get_value())
+        cfg["storage"]["cleanup"]["older_than_sec"] = int(self.auto_cleanup_age_spin.get_value())
+        cfg["storage"]["cleanup"]["severity_below"] = normalize_cleanup_severity(
+            (self.auto_cleanup_severity_combo.get_active_text() or "high").strip().lower()
+        )
 
         cfg["rules"]["profile"] = (self.rules_profile_combo.get_active_text() or "balanced").strip().lower()
         cfg["rules"]["min_severity"] = (self.rules_min_severity_combo.get_active_text() or "low").strip().lower()
@@ -880,9 +1065,6 @@ class NetMonitorTray:
         upper = float(adj.get_upper())
         page = float(adj.get_page_size())
         max_val = max(0.0, upper - page)
-        if not self._is_pin_scroll_enabled():
-            adj.set_value(max_val)
-            return
         if value is None:
             return
         adj.set_value(max(0.0, min(max_val, float(value))))
@@ -928,7 +1110,7 @@ class NetMonitorTray:
         self._set_tab(0)
 
     def _on_open_settings(self, _item) -> None:
-        self._set_tab(3)
+        self._set_tab(TAB_SETTINGS_INDEX)
 
     def _daemon_unit_name(self) -> str:
         cfg = self._read_yaml()
@@ -1290,6 +1472,29 @@ class NetMonitorTray:
         self.packet_search_entry.set_text("")
         self._refresh_packets_table(self._events_cache)
 
+    def _on_cleanup_packets(self, _btn) -> None:
+        mode = (self.packet_cleanup_severity_combo.get_active_text() or "below high").strip().lower()
+        severity_map = {
+            "below medium": "medium",
+            "below high": "high",
+            "below critical": "critical",
+            "all severities": "all",
+        }
+        cleanup_below = severity_map.get(mode, "high")
+
+        removed, remaining = cleanup_events_file(
+            HOME / "events.jsonl",
+            int(time.time()),
+            cleanup_below=cleanup_below,
+            older_than_sec=1,
+            force=True,
+        )
+        self._events_cache = self._read_last_events(300)
+        self._refresh_packets_table(self._events_cache)
+        self._append_text(
+            f"Manual cleanup: removed={removed}, remaining={remaining}, mode={cleanup_below}\n"
+        )
+
     def _on_packet_selected(self, selection) -> None:
         model, tree_iter = selection.get_selected()
         if tree_iter is None:
@@ -1568,15 +1773,17 @@ class NetMonitorTray:
             out_scroll.add(self.scan_output)
             outer.pack_start(out_scroll, True, True, 0)
 
-            self.scan_history_store = Gtk.ListStore(str, str, str, str)
+            self.scan_history_store = Gtk.ListStore(str, str, str, str, str)
             history_tree = Gtk.TreeView(model=self.scan_history_store)
             for idx, title in enumerate(["Time", "Target", "Profile", "Status"]):
                 hr = Gtk.CellRendererText()
                 history_tree.append_column(Gtk.TreeViewColumn(title, hr, text=idx))
+            history_tree.get_selection().connect("changed", self._on_scan_history_selected)
+            self.scan_history_tree = history_tree
             history_scroll = Gtk.ScrolledWindow()
             history_scroll.set_min_content_height(140)
             history_scroll.add(history_tree)
-            outer.pack_start(Gtk.Label(label="Scan history"), False, False, 0)
+            outer.pack_start(Gtk.Label(label=self._t("scan_history")), False, False, 0)
             outer.pack_start(history_scroll, True, True, 0)
 
             self.ip_window.add(outer)
@@ -1619,7 +1826,8 @@ class NetMonitorTray:
         if not hasattr(self, "scan_history_store"):
             return
         self.scan_history_store.clear()
-        for item in reversed(read_scan_history(SCAN_HISTORY, limit=60)):
+        items = list(reversed(read_scan_history(SCAN_HISTORY, limit=60)))
+        for item in items:
             ts = int(item.get("finished_ts", item.get("started_ts", 0)) or 0)
             ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else "-"
             self.scan_history_store.append([
@@ -1627,7 +1835,40 @@ class NetMonitorTray:
                 str(item.get("target", "-")),
                 str(item.get("profile", "-")),
                 str(item.get("status", "-")),
+                json.dumps(item, ensure_ascii=False),
             ])
+        if items:
+            last = items[0]
+            self._show_scan_result(last, mark_restored=False)
+
+    def _show_scan_result(self, result: Dict[str, Any], mark_restored: bool = False) -> None:
+        if not hasattr(self, "scan_output_buffer"):
+            return
+        cmd = result.get("command", [])
+        cmd_text = " ".join([str(x) for x in cmd]) if isinstance(cmd, list) else str(cmd or "")
+        header = (
+            f"target={result.get('target')} profile={result.get('profile')} "
+            f"status={result.get('status')} rc={result.get('return_code')}\n"
+            f"command={cmd_text}\n\n"
+        )
+        body = str(result.get("output", ""))
+        if mark_restored:
+            body = f"[{self._t('scan_restored')}]\n\n" + body
+        self.scan_output_buffer.set_text(header + body)
+
+    def _on_scan_history_selected(self, selection) -> None:
+        model, tree_iter = selection.get_selected()
+        if tree_iter is None:
+            return
+        raw = str(model.get_value(tree_iter, 4) or "")
+        if not raw:
+            return
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return
+        if isinstance(payload, dict):
+            self._show_scan_result(payload, mark_restored=True)
 
     def _on_run_ip_scan(self, _btn) -> None:
         if self._scan_in_progress:
@@ -1719,14 +1960,7 @@ class NetMonitorTray:
             self.scan_progress.set_text(f"Done ({status})")
         if hasattr(self, "scan_status_label"):
             self.scan_status_label.set_text(f"Scan status: {result.get('status', 'ok')}")
-        cmd = result.get("command", [])
-        cmd_text = " ".join([str(x) for x in cmd]) if isinstance(cmd, list) else str(cmd or "")
-        header = (
-            f"target={result.get('target')} profile={result.get('profile')} "
-            f"status={result.get('status')} rc={result.get('return_code')}\n"
-            f"command={cmd_text}\n\n"
-        )
-        self.scan_output_buffer.set_text(header + str(result.get("output", "")))
+        self._show_scan_result(result, mark_restored=False)
         self._refresh_scan_history_view()
         return False
 

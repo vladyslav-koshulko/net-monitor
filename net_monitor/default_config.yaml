@@ -10,6 +10,11 @@ storage:
   save_notify_jsonl: true
   save_decoded_payloads: true
   min_severity_to_save: "low"
+  cleanup:
+    enabled: false
+    interval_sec: 1800
+    older_than_sec: 1800
+    severity_below: "high"
   adaptive_flush_batching:
     enabled: true
     batch_size: 100

@@ -208,7 +208,8 @@ chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config/systemd/user/net-monitor-t
 echo "[6/8] Enable daemon service"
 systemctl daemon-reload
 systemctl reset-failed net-monitor.service || true
-systemctl enable --now net-monitor.service
+systemctl enable net-monitor.service
+systemctl restart net-monitor.service
 if ! systemctl is-active --quiet net-monitor.service; then
   echo "ERROR: net-monitor.service did not start successfully."
   show_recent_logs net-monitor.service system
@@ -218,12 +219,15 @@ fi
 echo "[7/8] Enable tray service for user"
 loginctl enable-linger "$TARGET_USER" || true
 if run_user_systemctl daemon-reload; then
-  run_user_systemctl enable --now net-monitor-tray.service || true
+  run_user_systemctl reset-failed net-monitor-tray.service || true
+  run_user_systemctl enable net-monitor-tray.service || true
+  run_user_systemctl restart net-monitor-tray.service || run_user_systemctl start net-monitor-tray.service || true
 else
   echo "WARN: user DBus session not available for $TARGET_USER right now."
   echo "After logging into desktop session, run:"
   echo "  systemctl --user daemon-reload"
-  echo "  systemctl --user enable --now net-monitor-tray.service"
+  echo "  systemctl --user enable net-monitor-tray.service"
+  echo "  systemctl --user restart net-monitor-tray.service"
 fi
 
 echo "[7.1/8] Smoke checks"

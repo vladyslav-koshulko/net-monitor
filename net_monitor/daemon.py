@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 from scapy.all import IP, IPv6, Raw, TCP, UDP, sniff, wrpcap  # type: ignore
 
+from .cleanup import cleanup_events_file, normalize_cleanup_severity
 from .config import ensure_home, load_yaml, read_json, severity_allowed, write_json
 from .rules import collect_exceptions, ignored_by_exception, load_pattern_rules, match_patterns, min_severity
 from .tls_audit import parse_tls_metadata
@@ -709,12 +710,18 @@ def run_daemon(config_path: Optional[str] = None, once: bool = False, home_path:
     save_decoded_payloads = bool(storage_cfg.get("save_decoded_payloads", True))
     min_severity_to_save = str(storage_cfg.get("min_severity_to_save", "low")).lower()
     decoded_payloads_path = paths.home / "decoded_payloads.jsonl"
+    cleanup_cfg = storage_cfg.get("cleanup", {}) if isinstance(storage_cfg.get("cleanup"), dict) else {}
+    auto_cleanup_enabled = bool(cleanup_cfg.get("enabled", False))
+    auto_cleanup_interval_sec = max(5, int(cleanup_cfg.get("interval_sec", 1800) or 1800))
+    auto_cleanup_older_than_sec = max(5, int(cleanup_cfg.get("older_than_sec", auto_cleanup_interval_sec) or auto_cleanup_interval_sec))
+    auto_cleanup_severity_below = normalize_cleanup_severity(str(cleanup_cfg.get("severity_below", "high")))
 
     last_stats = time.time()
     last_health = time.time()
     last_summary = time.time()
     last_flush = time.time()
     last_flush_packets = 0
+    last_cleanup_run = time.time()
 
     events_buffer: List[Dict[str, Any]] = []
     ecs_buffer: List[Dict[str, Any]] = []
@@ -917,7 +924,7 @@ def run_daemon(config_path: Optional[str] = None, once: bool = False, home_path:
         return {"scope": "external", "country": "-", "asn": "-", "org": "-", "status": "resolving"}
 
     def process_packet(pkt) -> None:
-        nonlocal baseline_total, last_stats, last_health, last_summary, last_process_refresh, process_future
+        nonlocal baseline_total, last_stats, last_health, last_summary, last_process_refresh, process_future, last_cleanup_run
         now = time.time()
         state.total_packets += 1
         ring.append((now, pkt))
@@ -1361,6 +1368,20 @@ def run_daemon(config_path: Optional[str] = None, once: bool = False, home_path:
                 asset_inventory,
             )
             last_summary = now
+
+        if auto_cleanup_enabled and (now - last_cleanup_run) >= auto_cleanup_interval_sec:
+            removed, remaining = cleanup_events_file(
+                paths.events_jsonl,
+                int(now),
+                cleanup_below=auto_cleanup_severity_below,
+                older_than_sec=auto_cleanup_older_than_sec,
+            )
+            if removed:
+                print(
+                    f"[cleanup] removed={removed} remaining={remaining} "
+                    f"severity_below={auto_cleanup_severity_below} age_sec={auto_cleanup_older_than_sec}"
+                )
+            last_cleanup_run = now
 
         flush_buffers(now)
         flush_evidence(now)
